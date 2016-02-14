@@ -130,7 +130,7 @@ def regenerateReadings(nids):
         try:
             note[dst] = furitsuki.reading(srcTxt)
         except Exception, e:
-            mecab = None
+            furitsuki = None
             raise
         note.flush()
     mw.progress.finish()
