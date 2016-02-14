@@ -14,36 +14,56 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-import subprocess
+#from __future__ import print_function
 from anki.hooks import addHook
+from aqt import QProcess, QAction, mw
 
 CONFIG = {
     'srcFields': ['Expression'],
     'dstFields': ['Reading'],
+    # For bulk readings, filter models
+    'checkModel': False,
+    'models': [],
+    # Automatically add reading when focus lost on an srcField
+    # Conflicts with the Japanese Support plugin
+    'addOnFocusLost': True
 }
 
 JAR_FILE = '../../addons/furitsuki/furitsuki.jar'
-PROC_ARGS = ['java', '-jar', JAR_FILE]
+PROC_CMD = 'java'
+PROC_ARGS = ['-jar', JAR_FILE]
 
 class FuritsukiController:
     def __init__(self):
         self.proc = None
 
-    def ensure_open(self):
-        if not self.proc:
-            self.proc = subprocess.Popen(PROC_ARGS, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    def ensure_open(self, warmup = True):
+        if not self.proc or self.proc.state() == QProcess.NotRunning:
+            self.proc = QProcess(mw)
+            self.proc.start(PROC_CMD, PROC_ARGS)
+            self.proc.waitForStarted()
+            if warmup:
+                self.proc.write('私\n') # Get things running, as it takes a while to load the dictionaries
+                self.proc.readyReadStandardOutput.connect(self.warmup_ready)
+
+    def warmup_ready(self):
+        self.proc.readAllStandardOutput() # Eat the output from the warmup
+        self.proc.readyReadStandardOutput.disconnect(self.warmup_ready)
+
+    def write_input(self, text):
+        self.proc.write(text.replace('\n', ' ').encode('utf-8')) # Make sure we only have one line
+        self.proc.write(u'\n')
+        self.proc.waitForBytesWritten()
 
     def reading(self, text):
-        self.ensure_open()
-        self.proc.stdin.write(text.replace('\n', ' ').encode('utf-8')) # Make sure we only have one line
-        self.proc.stdin.write(u'\n')
-        self.proc.stdin.flush()
-        return unicode(self.proc.stdout.readline(), 'utf-8')
+        self.ensure_open(warmup = False)
+        self.write_input(text)
+        self.proc.waitForReadyRead()
+        return unicode(str(self.proc.readLine()), 'utf-8')
 
-# Shamelessly copied from the Japanese support plugin -- but this is GPL so it's all good
+# Shamelessly copied from the Japanese Support plugin -- but this is GPL so it's all good
 def onFocusLost(flag, n, fidx):
     global furitsuki
-    from aqt import mw
     if not furitsuki:
         return flag
     src = None
@@ -71,14 +91,63 @@ def onFocusLost(flag, n, fidx):
         return flag
     # update field
     try:
-        n[dst] = u'Loading...'
-        n.flush()
         n[dst] = furitsuki.reading(srcTxt)
     except Exception, e:
         furitsuki = None
         raise
     return True
 
+def regenerateReadings(nids):
+    global furitsuki
+    mw.checkpoint("Bulk-add Readings")
+    mw.progress.start()
+    for nid in nids:
+        note = mw.col.getNote(nid)
+        if CONFIG['checkModel'] and note.model()['name'].lower() not in CONFIG['models']:
+            continue
+        src = None
+        for fld in CONFIG['srcFields']:
+            if fld in note:
+                src = fld
+                break
+        if not src:
+            # no src field
+            continue
+        dst = None
+        for fld in CONFIG['dstFields']:
+            if fld in note:
+                dst = fld
+                break
+        if not dst:
+            # no dst field
+            continue
+        if note[dst]:
+            # already contains data, skip
+            continue
+        srcTxt = mw.col.media.strip(note[src])
+        if not srcTxt.strip():
+            continue
+        try:
+            note[dst] = furitsuki.reading(srcTxt)
+        except Exception, e:
+            mecab = None
+            raise
+        note.flush()
+    mw.progress.finish()
+    mw.reset()
+
+def setupMenu(browser):
+    a = QAction("Furitsuki Bulk-add Readings", browser)
+    a.triggered.connect(lambda x: onRegenerate(browser))
+    browser.form.menuEdit.addSeparator()
+    browser.form.menuEdit.addAction(a)
+
+def onRegenerate(browser):
+    regenerateReadings(browser.selectedNotes())
+
 # Init
 furitsuki = FuritsukiController()
-addHook('editFocusLost', onFocusLost)
+if CONFIG['addOnFocusLost']:
+    addHook('editFocusLost', onFocusLost)
+addHook('profileLoaded', furitsuki.ensure_open)
+addHook('browser.setupMenus', setupMenu)
