@@ -1,0 +1,7 @@
+{
+  "srcFields": ["Expression", "Sentence-expression"],
+  "dstFields": ["Reading", "Sentence-furigana"],
+  "checkModel": false,
+  "models": [],
+  "addOnFocusLost": true
+}

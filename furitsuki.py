@@ -14,22 +14,14 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#from __future__ import print_function
 from anki.hooks import addHook
 from aqt import QProcess, QAction, mw
+from aqt.qt import debug
+import os.path
 
-CONFIG = {
-    'srcFields': ['Expression'],
-    'dstFields': ['Reading'],
-    # For bulk readings, filter models
-    'checkModel': False,
-    'models': [],
-    # Automatically add reading when focus lost on an srcField
-    # Conflicts with the Japanese Support plugin
-    'addOnFocusLost': True
-}
+config = mw.addonManager.getConfig(__name__)
 
-JAR_FILE = '../../addons/furitsuki/furitsuki.jar'
+JAR_FILE = os.path.join(mw.pm.addonFolder(),'furitsuki-anki','furitsuki.jar')
 PROC_CMD = 'java'
 PROC_ARGS = ['-jar', JAR_FILE]
 
@@ -43,7 +35,7 @@ class FuritsukiController:
             self.proc.start(PROC_CMD, PROC_ARGS)
             self.proc.waitForStarted()
             if warmup:
-                self.proc.write('私\n') # Get things running, as it takes a while to load the dictionaries
+                self.proc.write(bytes('私\n', 'utf8')) # Get things running, as it takes a while to load the dictionaries
                 self.proc.readyReadStandardOutput.connect(self.warmup_ready)
 
     def warmup_ready(self):
@@ -52,14 +44,14 @@ class FuritsukiController:
 
     def write_input(self, text):
         self.proc.write(text.replace('\n', ' ').encode('utf-8')) # Make sure we only have one line
-        self.proc.write(u'\n')
+        self.proc.write(b'\n')
         self.proc.waitForBytesWritten()
 
     def reading(self, text):
         self.ensure_open(warmup = False)
         self.write_input(text)
         self.proc.waitForReadyRead()
-        return unicode(str(self.proc.readLine()), 'utf-8')
+        return str(self.proc.readLine(), 'utf-8')
 
 # Shamelessly copied from the Japanese Support plugin -- but this is GPL so it's all good
 def onFocusLost(flag, n, fidx):
@@ -70,11 +62,11 @@ def onFocusLost(flag, n, fidx):
     dst = None
     # have src and dst fields?
     for c, name in enumerate(mw.col.models.fieldNames(n.model())):
-        for f in CONFIG['srcFields']:
+        for f in config['srcFields']:
             if name == f:
                 src = f
                 srcIdx = c
-        for f in CONFIG['dstFields']:
+        for f in config['dstFields']:
             if name == f:
                 dst = f
     if not src or not dst:
@@ -92,7 +84,7 @@ def onFocusLost(flag, n, fidx):
     # update field
     try:
         n[dst] = furitsuki.reading(srcTxt)
-    except Exception, e:
+    except Exception as e:
         furitsuki = None
         raise
     return True
@@ -103,10 +95,10 @@ def regenerateReadings(nids):
     mw.progress.start()
     for nid in nids:
         note = mw.col.getNote(nid)
-        if CONFIG['checkModel'] and note.model()['name'].lower() not in CONFIG['models']:
+        if config['checkModel'] and note.model()['name'].lower() not in config['models']:
             continue
         src = None
-        for fld in CONFIG['srcFields']:
+        for fld in config['srcFields']:
             if fld in note:
                 src = fld
                 break
@@ -114,7 +106,7 @@ def regenerateReadings(nids):
             # no src field
             continue
         dst = None
-        for fld in CONFIG['dstFields']:
+        for fld in config['dstFields']:
             if fld in note:
                 dst = fld
                 break
@@ -129,7 +121,7 @@ def regenerateReadings(nids):
             continue
         try:
             note[dst] = furitsuki.reading(srcTxt)
-        except Exception, e:
+        except Exception as e:
             furitsuki = None
             raise
         note.flush()
@@ -147,7 +139,7 @@ def onRegenerate(browser):
 
 # Init
 furitsuki = FuritsukiController()
-if CONFIG['addOnFocusLost']:
+if config['addOnFocusLost']:
     addHook('editFocusLost', onFocusLost)
 addHook('profileLoaded', furitsuki.ensure_open)
 addHook('browser.setupMenus', setupMenu)
