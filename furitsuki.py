@@ -17,13 +17,15 @@
 from anki.hooks import addHook
 from aqt import QProcess, QAction, mw
 from aqt.qt import debug
+import aqt.utils
 import os.path
 
 config = mw.addonManager.getConfig(__name__)
 
-JAR_FILE = os.path.join(mw.pm.addonFolder(),'furitsuki-anki','furitsuki.jar')
+JAR_FILE = os.path.join(os.path.dirname(__file__), 'furitsuki.jar')
 PROC_CMD = 'java'
-PROC_ARGS = ['-jar', JAR_FILE]
+PROC_ARGS = ['-Dfile.encoding=UTF-8', '-jar', JAR_FILE]
+STDERR_FILE = os.path.join(os.path.dirname(__file__), 'stderr.txt')
 
 class FuritsukiController:
     def __init__(self):
@@ -32,11 +34,15 @@ class FuritsukiController:
     def ensure_open(self, warmup = True):
         if not self.proc or self.proc.state() == QProcess.NotRunning:
             self.proc = QProcess(mw)
+            self.proc.setStandardErrorFile(STDERR_FILE)
+            self.proc.setReadChannel(QProcess.StandardOutput)
             self.proc.start(PROC_CMD, PROC_ARGS)
-            self.proc.waitForStarted()
-            if warmup:
-                self.proc.write(bytes('私\n', 'utf8')) # Get things running, as it takes a while to load the dictionaries
-                self.proc.readyReadStandardOutput.connect(self.warmup_ready)
+            if self.proc.waitForStarted():
+                if warmup:
+                    self.proc.write(bytes('私\n', 'utf-8')) # Get things running, as it takes a while to load the dictionaries
+                    self.proc.readyReadStandardOutput.connect(self.warmup_ready)
+            else:
+                self.showProcError()
 
     def warmup_ready(self):
         self.proc.readAllStandardOutput() # Eat the output from the warmup
@@ -49,9 +55,19 @@ class FuritsukiController:
 
     def reading(self, text):
         self.ensure_open(warmup = False)
+        self.proc.readAllStandardOutput()
         self.write_input(text)
-        self.proc.waitForReadyRead()
-        return str(self.proc.readLine(), 'utf-8')
+        r = ''
+        while r == '':
+            if self.proc.waitForReadyRead():
+                r = str(self.proc.readLine(), 'utf-8').strip()
+            else:
+                self.showProcError()
+                return ''
+        return r
+
+    def showProcError(self):
+        aqt.utils.showInfo("[Furitsuki] {0}".format(self.proc.errorString()))
 
 # Shamelessly copied from the Japanese Support plugin -- but this is GPL so it's all good
 def onFocusLost(flag, n, fidx):
@@ -138,8 +154,11 @@ def onRegenerate(browser):
     regenerateReadings(browser.selectedNotes())
 
 # Init
-furitsuki = FuritsukiController()
-if config['addOnFocusLost']:
-    addHook('editFocusLost', onFocusLost)
-addHook('profileLoaded', furitsuki.ensure_open)
-addHook('browser.setupMenus', setupMenu)
+if os.path.isfile(JAR_FILE):
+    furitsuki = FuritsukiController()
+    if config['addOnFocusLost']:
+        addHook('editFocusLost', onFocusLost)
+    addHook('profileLoaded', furitsuki.ensure_open)
+    addHook('browser.setupMenus', setupMenu)
+else:
+    aqt.utils.showInfo("'{0}' does not exist".format(JAR_FILE))
